@@ -11,7 +11,17 @@ from .const import DEFAULT_USER_AGENT, POINTT_BASE_URL
 
 
 class BuderusApiError(Exception):
-    """Raised when the Buderus/Bosch PointT API returns an unexpected response."""
+    """Raised when the Buderus/Bosch PointT API returns an unexpected response.
+
+    `status` carries the HTTP status when there was one, because the **message is not a place to keep it**:
+    `coordinator._async_update_data` has to tell a 404 ("the plant withdraws this resource") from a timeout or a
+    5xx ("the plant did not answer"); before `status` existed the only way to tell them apart was to
+    string-match the text. 0 means "no response at all".
+    """
+
+    def __init__(self, message: str, status: int = 0) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 class BuderusAuthError(BuderusApiError):
@@ -117,7 +127,7 @@ class BuderusPointTClient:
                 )
             if response.status >= 400:
                 body = await response.text()
-                raise BuderusApiError(f"API request failed: {response.status} {body}")
+                raise BuderusApiError(f"API request failed: {response.status} {body}", status=response.status)
             if response.status == 204:
                 return None
             body = await response.text()

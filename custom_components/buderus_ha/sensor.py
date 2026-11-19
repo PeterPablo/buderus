@@ -47,6 +47,11 @@ class BuderusSensorEntityDescription(SensorEntityDescription):
     value_kind: str = "value"
     value_scale: float = 1.0
     requires_value: bool = False
+    # A *remaining time* answers `null` when nothing is running. That is not a missing reading — it is
+    # "0 minutes left" — so the entity reports 0 and a plot or a template can subtract it. A resource that
+    # could not be fetched stays `unknown`, which is the honest difference between "nothing running" and
+    # "could not read"; see `_ZERO_WHEN_NULL`.
+    zero_when_null: bool = False
 
 
 ENERGY_KWH: dict[str, Any] = {
@@ -613,6 +618,12 @@ SENSOR_DESCRIPTIONS: tuple[BuderusSensorEntityDescription, ...] = (
 # Deliberately **not** here, because no entity can honestly show them: `gateway/thirdPartyLicenseInformation`
 # and `zones/configuration` (kilobyte blobs), `wifi/ssid` and `zones/list` (lists), the base64 `name` fields,
 # `hc1/switchPrograms/A` (answers null here) and `variableTariff/supportStatus` (a constant).
+# The remaining-time resources are the only ones where `null` has a meaning worth spelling out:
+# `hc1/boostRemainingTime` answers **null** while no boost runs, `dhw1/chargeRemainingTime` answers **0.0** in the
+# same situation. Two spellings of one fact — and `unknown` in a plot is a hole a reader has to interpret. The
+# plant's own 0 is the right model for both.
+_ZERO_WHEN_NULL: frozenset[str] = frozenset({"hc1_boost_remaining", "dhw_charge_remaining"})
+
 _EXTRA_SENSORS: tuple[tuple[str, str, Any, Any, str, tuple[str, ...], str], ...] = (
     # (key, resource path, unit, device_class, icon, options, kind)
     ("compressor_power_electrical", "/heatSources/compressor/powerElecActual",
@@ -687,6 +698,7 @@ SENSOR_DESCRIPTIONS += tuple(
         ),
         icon=icon,
         options=options or None,
+        zero_when_null=key in _ZERO_WHEN_NULL,
         entity_category=EntityCategory.DIAGNOSTIC,
     )
     for key, path, unit, device_class, icon, options, kind in _EXTRA_SENSORS
@@ -776,6 +788,10 @@ class BuderusSensor(CoordinatorEntity[BuderusDataUpdateCoordinator], SensorEntit
             return environmental_energy(resource)
 
         value = resource.get(self.entity_description.value_key)
+        if value is None and self.entity_description.zero_when_null:
+            # Reached only when the resource itself arrived — a path that failed to fetch never gets here, so
+            # "could not read" cannot be turned into a 0.
+            return 0
         if value in (32767.0, -32768.0):
             return None
         if isinstance(value, (int, float)) and self.entity_description.value_scale != 1.0:

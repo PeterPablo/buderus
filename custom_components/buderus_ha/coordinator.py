@@ -109,6 +109,19 @@ RESOURCE_PATHS: tuple[str, ...] = (
 )
 
 
+# Two resources the plant *withdraws* instead of reporting zero: while no boost or charge runs, the path answers
+# **404**, and while one runs it answers the remaining minutes (measured: `hc1/boostRemainingTime` 145 min
+# during a boost, 404 with none running, while `dhw1/chargeRemainingTime` stayed at 0.0 — the same fact in two
+# spellings, one of them an absence). For these two paths absence *is* the zero, so a 404 is
+# translated into a present-but-null resource and the sensor's `zero_when_null` reports 0. Nothing else is
+# translated: a timeout, a 5xx or an auth failure leaves the entity `unknown`, which is the difference between
+# "nothing running" and "could not read".
+_ABSENT_MEANS_ZERO: frozenset[str] = frozenset({
+    "/heatingCircuits/hc1/boostRemainingTime",
+    "/dhwCircuits/dhw1/chargeRemainingTime",
+})
+
+
 class BuderusDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Fetch all currently known read-only PointT resources."""
 
@@ -144,6 +157,8 @@ class BuderusDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 resources[path] = await self.client.get_resource(self.gateway_id, path)
             except BuderusApiError as err:
                 errors[path] = str(err)
+                if path in _ABSENT_MEANS_ZERO and getattr(err, "status", 0) == 404:
+                    resources[path] = {"value": None}
                 LOGGER.debug("Failed to fetch %s: %s", path, err)
 
         if not resources:
